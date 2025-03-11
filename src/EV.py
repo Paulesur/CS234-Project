@@ -1,28 +1,6 @@
 import numpy as np
 import random
-
-
-def chooseRandomSOCInit():
-    """
-    Choose a random initial state of charge for the EV when it arrives at the station
-    """
-    a, b = 1.2, 7
-    return np.random.beta(a, b, 1)
-
-
-def chooseRandomCapacity():
-    """
-    Choose a random capacity for the EV
-    """
-    return random.uniform(0.02, 0.06)
-
-
-def chooseRandomSOC_f(soc_i):
-    """
-    Choose a random state of charge for the EV after which it will leave the station
-    """
-    return random.uniform(max(0.85, soc_i), 1)
-
+from GenerateEVs import chooseRandomCapacity, chooseRandomSOCInit, chooseRandomSOC_f
 
 class EV:
     """
@@ -39,6 +17,20 @@ class EV:
         self.capacity = chooseRandomCapacity()
         self.soc = chooseRandomSOCInit()
         self.soc_f = chooseRandomSOC_f(self.soc)
+        self.soc_i = self.soc
 
     def updateSOC(self, P):
         self.soc = max(0, min(1, self.soc + P / (4 * self.capacity)))  # 15 minutes
+
+    def reset(self):
+        self.soc = 0
+        self.soc_i = 0
+        self.soc_f = 0
+    
+    def copy(self):
+        e = EV()
+        e.capacity = self.capacity
+        e.soc = self.soc
+        e.soc_f = self.soc_f
+        e.soc_i = self.soc_i
+        return e
