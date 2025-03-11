@@ -1,6 +1,5 @@
-import numpy as np
-import random
 from GenerateEVs import chooseRandomCapacity, chooseRandomSOCInit, chooseRandomSOC_f
+
 
 class EV:
     """
@@ -26,7 +25,7 @@ class EV:
         self.soc = 0
         self.soc_i = 0
         self.soc_f = 0
-    
+
     def copy(self):
         e = EV()
         e.capacity = self.capacity

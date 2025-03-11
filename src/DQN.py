@@ -1,15 +1,14 @@
 import numpy as np
 import torch
+import random
 from collections import deque
 from network_utils import build_mlp
 import pandas as pd
-import random
 from tqdm import tqdm
 from copy import deepcopy
 
 
 class DQN:
-
     def __init__(self, prices, station, epsilon, lenEpisodes, lr=0.001):
         self.station = station
         self.gamma = 0.999

@@ -2,7 +2,6 @@ from Station import EVStation
 from Battery import Battery
 import pandas as pd
 import numpy as np
-from tqdm import tqdm
 
 
 class GreedyPolicy:

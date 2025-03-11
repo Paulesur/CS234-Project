@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 prices = pd.read_csv("../data/prices.csv", index_col=0, parse_dates=True)

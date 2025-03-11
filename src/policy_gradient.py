@@ -1,7 +1,7 @@
 from tqdm import tqdm
 import numpy as np
 import torch
-from general import get_logger, Progbar, export_plot
+from general import export_plot
 from baseline_network import BaselineNetwork
 from network_utils import build_mlp, device, np2torch
 from policy import CategoricalPolicy
@@ -303,19 +303,6 @@ class PolicyGradient:
         )
         export_plot(averaged_total_rewards, "Score", "Test", "PGResults/score.png")
         return averaged_total_rewards, self.losses
-
-    def evaluate(self, env=None, num_episodes=1):
-        """
-        Evaluates the return for num_episodes episodes.
-        """
-        if env == None:
-            env = self.env
-        paths, rewards = self.sample_path(env, num_episodes)
-        avg_reward = np.mean(rewards)
-        sigma_reward = np.sqrt(np.var(rewards) / len(rewards))
-        msg = "Average reward: {:04.2f} +/- {:04.2f}".format(avg_reward, sigma_reward)
-        self.logger.info(msg)
-        return avg_reward
 
     def run(self):
         """

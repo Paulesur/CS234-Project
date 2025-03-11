@@ -7,14 +7,12 @@ from policy import CategoricalPolicy
 from network_utils import build_mlp, np2torch
 from copy import deepcopy
 from Battery import Battery
-from EV import EV
 from Station import EVStation
 from tqdm import tqdm
 from collections import deque
 
 
 class SAC:
-
     def __init__(
         self,
         prices,

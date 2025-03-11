@@ -1,7 +1,5 @@
-import torch
 import torch.nn as nn
 import torch.distributions as ptd
-import numpy as np
 
 from network_utils import np2torch, device
 

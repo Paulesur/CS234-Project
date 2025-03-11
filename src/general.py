@@ -3,8 +3,6 @@ import sys
 import logging
 import math
 import numpy as np
-from collections import deque
-import matplotlib
 
 import matplotlib.pyplot as plt
 import torch
