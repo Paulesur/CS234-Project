@@ -7,6 +7,7 @@ from policy import CategoricalPolicy
 from network_utils import build_mlp, np2torch
 from copy import deepcopy
 from Battery import Battery
+from EV import EV
 from Station import EVStation
 from tqdm import tqdm
 from collections import deque
@@ -19,13 +20,13 @@ class SAC:
         lr=0.001,
         gamma=0.999,
         tau=0.005,
-        batch_size=300,
-        buffer_size=3000,
+        batch_size=100,
+        buffer_size=100000,
     ):
         storage = Battery(capacity=0.8, soc=0, max_power=0.2)
 
         self.station = EVStation(6, 0.15, storage, 300)
-        self.Ndays = 1  # 3
+        self.Ndays = 3  # 3
         self.prices = prices
         self.stateDimension = self.station.observation_space_size
         self.actionDimension = self.station.action_space_size
@@ -38,11 +39,10 @@ class SAC:
         self.buffer_counter = 0
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.target_entropy = -1
+        self.target_entropy = 0.6 * (-np.log(1 / self.actionDimension))
 
         # temperature parameter
-        self.log_alpha = torch.tensor([np.log(20)], requires_grad=True)
-        self.alpha_optimizer = optim.Adam([self.log_alpha], lr=0.0001)
+        self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
 
         self.actor = CategoricalPolicy(
             build_mlp(self.stateDimension, self.actionDimension, 2, 64)
@@ -57,18 +57,20 @@ class SAC:
         )
 
         self.actor_optimizer = optim.Adam(self.actor.network.parameters(), lr=0.0001)
-        self.critic1_optimizer = optim.Adam(self.critic1.parameters(), lr=0.0001)
-        self.critic2_optimizer = optim.Adam(self.critic2.parameters(), lr=0.0001)
+        self.critic1_optimizer = optim.Adam(self.critic1.parameters(), lr=0.001)
+        self.critic2_optimizer = optim.Adam(self.critic2.parameters(), lr=0.001)
+        self.alpha_optimizer = optim.Adam([self.log_alpha], lr=0.0001)
 
         self.target_critic1 = deepcopy(self.critic1)
         self.target_critic2 = deepcopy(self.critic2)
 
     def select_action(self, state):
         state = np2torch(np.array(state))
-        distribution = self.actor.action_distribution(state)
-        sampled_actions = distribution.sample()
-        log_probs = distribution.log_prob(sampled_actions)
-        return sampled_actions, log_probs
+        with torch.no_grad():
+            distribution = self.actor.action_distribution(state)
+            sampled_actions = distribution.sample()
+            log_probs = distribution.log_prob(sampled_actions)
+            return sampled_actions, log_probs
 
     def store_transition(self, state, action, reward, next_state, done):
         self.buffer.append((state, action, reward, next_state, done))
@@ -79,11 +81,11 @@ class SAC:
 
     @property
     def alpha(self):
-        return self.log_alpha.exp()
+        return self.log_alpha.exp().detach()
 
     def update(self):
 
-        if len(self.buffer) < self.batch_size:
+        if len(self.buffer) < 96 * 31:
             return
 
         batch = np.random.choice(len(self.buffer), self.batch_size, replace=True)
@@ -92,23 +94,25 @@ class SAC:
         )
 
         states = torch.FloatTensor(states).to(self.device)
-        actions = torch.tensor(actions, dtype=torch.int64).to(self.device)
+        actions = torch.tensor(actions).to(self.device)
         rewards = torch.FloatTensor(rewards).to(self.device)
         next_states = torch.FloatTensor(next_states).to(self.device)
         dones = torch.FloatTensor(dones).to(self.device)
 
-        next_actions, logpis = self.select_action(next_states)
-        Q_target1 = self.target_critic1(next_states).gather(
-            1, next_actions.unsqueeze(1)
-        )
-        Q_target2 = self.target_critic2(next_states).gather(
-            1, next_actions.unsqueeze(1)
-        )
-
-        Q_target = torch.min(Q_target1, Q_target2)
-        Q_target_next = (
-            rewards + self.gamma * (Q_target.squeeze(1) - self.alpha * logpis.cpu())
-        ).float()
+        with torch.no_grad():
+            dist = self.actor.action_distribution(next_states)
+            probs = dist.probs
+            logpis = torch.log(probs + 1e-8)
+            probs = torch.exp(logpis)
+            Q_target1 = self.target_critic1(next_states)
+            Q_target2 = self.target_critic2(next_states)
+            Q_target = torch.min(Q_target1, Q_target2)
+            nextV = (probs * (Q_target - self.alpha * logpis)).sum(-1).unsqueeze(-1)
+            Q_target_next = (
+                rewards
+                + self.gamma
+                * (probs * (Q_target - self.alpha * logpis)).sum(-1).unsqueeze(-1)
+            ).float()
 
         Q1 = self.critic1(states).gather(1, actions.unsqueeze(1)).float().squeeze(1)
         Q2 = self.critic2(states).gather(1, actions.unsqueeze(1)).float().squeeze(1)
@@ -124,22 +128,25 @@ class SAC:
         critic2_loss.backward()
         self.critic2_optimizer.step()
 
-        actorQ1, actorQ2 = self.critic1(states).gather(
-            1, actions.unsqueeze(1)
-        ), self.critic2(states).gather(1, actions.unsqueeze(1))
-        next_actions, logpis = self.select_action(states)
+        dist = self.actor.action_distribution(states)
+        probs = dist.probs
+        logpis = torch.log(probs + 1e-8)
+        with torch.no_grad():
+            actorQ1, actorQ2 = self.critic1(states), self.critic2(states)
+            minQ = torch.min(actorQ1, actorQ2)
 
+        self.actor_optimizer.zero_grad()
+        actor_loss = (probs * (self.alpha.detach() * logpis - minQ)).sum(-1).mean()
+        actor_loss.backward()
+        self.actor_optimizer.step()
+
+        log_probs = (probs * logpis).sum(-1)
         self.alpha_optimizer.zero_grad()
-        alpha_loss = (
-            self.alpha * (-logpis.cpu() - self.target_entropy).detach()
+        alpha_loss = -(
+            self.log_alpha * (log_probs.detach() + self.target_entropy)
         ).mean()
         alpha_loss.backward()
         self.alpha_optimizer.step()
-
-        self.actor_optimizer.zero_grad()
-        actor_loss = (self.alpha * logpis.cpu() - torch.min(actorQ1, actorQ2)).mean()
-        actor_loss.backward()
-        self.actor_optimizer.step()
 
     def train(self, episodes):
 
@@ -236,18 +243,31 @@ class SAC:
                 self.store_transition(state, actionbatt, reward, next_state, done)
                 state = next_state
                 self.update()
-            if episode % 2 == 0:
+                if t % 5 == 0:
+                    for target_param, param in zip(
+                        self.target_critic1.parameters(), self.critic1.parameters()
+                    ):
+                        target_param.data.copy_(
+                            self.tau * param.data + (1 - self.tau) * target_param.data
+                        )
+                    for target_param, param in zip(
+                        self.target_critic2.parameters(), self.critic2.parameters()
+                    ):
+                        target_param.data.copy_(
+                            self.tau * param.data + (1 - self.tau) * target_param.data
+                        )
+            if episode % 20 == 0:  # hard update after 10 episodes
                 for target_param, param in zip(
                     self.target_critic1.parameters(), self.critic1.parameters()
                 ):
                     target_param.data.copy_(
-                        self.tau * param.data + (1 - self.tau) * target_param.data
+                        0.95 * param.data + (1 - 0.95) * target_param.data
                     )
                 for target_param, param in zip(
                     self.target_critic2.parameters(), self.critic2.parameters()
                 ):
                     target_param.data.copy_(
-                        self.tau * param.data + (1 - self.tau) * target_param.data
+                        0.95 * param.data + (1 - 0.95) * target_param.data
                     )
             scores.append(score / self.Ndays)
 
